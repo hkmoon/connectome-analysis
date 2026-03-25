@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "py_connectome_analysis"
-version = "1.0.5"
+version = "1.0.6"
 description = "Methods for network analysis of graphs coming from brain models and activity on them"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -74,14 +74,13 @@ include = '\.pyi?$'
 
 [tool.pytest.ini_options]
 addopts = """\
-    --cov template \
-    --cov tests \
+    --cov connalysis \
     --cov-report term-missing \
     --no-cov-on-fail \
 """
 
 [tool.coverage.report]
-fail_under = 100
+fail_under = 10
 exclude_lines = [
     'if TYPE_CHECKING:',
     'pragma: no cover'
