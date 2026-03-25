@@ -1,3 +1,4 @@
+#include <array>
 #include <vector>
 #include <thread>
 #include <cstring>
@@ -7,7 +8,7 @@
 #include <chrono>
 #include <cassert>
 #include <regex>
-#include <math.h>
+#include <cmath>
 #include <limits>
 // #include <mutex>
 
