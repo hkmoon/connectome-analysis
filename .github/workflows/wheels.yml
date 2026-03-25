@@ -1,9 +1,13 @@
 name: Build and publish wheels
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - "**"
+#  release:
+#    types: [published]
+#  workflow_dispatch:
 
 jobs:
   build_wheels:
