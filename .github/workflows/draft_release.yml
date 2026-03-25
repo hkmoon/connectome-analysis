@@ -16,13 +16,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Update version in pyproject.toml
+        env:
+          RELEASE_VERSION: ${{ github.event.inputs.version }}
         run: |
           pip install tomli tomli-w
           python -c "
-          import tomli, tomli_w, pathlib
+          import tomli, tomli_w, pathlib, os
           p = pathlib.Path('pyproject.toml')
           data = tomli.loads(p.read_text())
-          data['project']['version'] = '${{ github.event.inputs.version }}'
+          data['project']['version'] = os.environ['RELEASE_VERSION']
           p.write_text(tomli_w.dumps(data))
           "
       - name: Commit changes
