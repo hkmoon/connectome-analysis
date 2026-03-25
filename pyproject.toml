@@ -1,69 +1,68 @@
-[tool.poetry]
-name = "connectome_analysis"
-version = "0.0.1"
-description = "Functions for network analysis of graphs coming brain models and activity on them"
-authors = [
-    "Daniela Egas Santander <daniela.egassantander@epfl.ch>",
-    "Christoph Pokorny <christoph.pokorny@epfl.ch>",
-    "Michael Wolfgang Reimann <michael.reimann@epfl.ch>",
-    "Jason Smith <jason.smith@ntu.ac.uk>", #TODO: I make the list alpabhetical, am I missing someone?
-]
-license = "TO BE DECIDED"
-readme = "README.md"
-
-documentation = "https://danielaegassan.github.io/connectome_analysis"
-homepage = "https://danielaegassan.github.io/connectome_analysis"
-repository = "https://github.com/danielaegassan/connectome_analysis"
-
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Intended Audience :: Developers",
-  "Operating System :: OS Independent",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.7",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Topic :: Software Development :: Libraries :: Python Modules",
-  "Typing :: Typed",
-]
-
-packages = [
-    { include = "connalysis", from = "src" },
-    #{ include = "generate_model", from = "src" },
-]
-
-[tool.poetry.dependencies]
-python = ">=3.8.3, <4"
-numpy = "*"
-pandas = "*"
-tables = "*"
-scipy = "*"
-matplotlib = "*"
-progressbar ="2.5"
-tqdm="*"
-pyflagsercount = ">=0.2.41"
-pyflagser ="*"
-
-[tool.poetry.dev-dependencies]
-black = "*"
-mkdocstrings = {version = ">=0.18", extras = ["python"]}
-mkdocs-material = "*"
-pytest = "*"
-pytest-github-actions-annotate-failures = "*"
-pytest-cov = "*"
-
-[tool.poetry.group.dev.dependencies]
-jupyter = "^1.0.0"
-seaborn = "*"
-networkx = "*"
-
 [build-system]
-requires = ["poetry-core>=1.2.0","setuptools"]
-build-backend = "poetry.core.masonry.api"
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
 
-[tool.poetry.build]
-script = "build.py"
+[project]
+name = "py_connectome_analysis"
+version = "1.0.3"
+description = "Methods for network analysis of graphs coming from brain models and activity on them"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.9,<3.13"
+authors = [
+    {name = "Daniela Egas Santander", email = "daniela.egas.math@gmail.com"},
+    {name = "Christoph Pokorny", email = "christoph.pokorny@openbraininstitute.org"},
+    {name = "Jason Smith", email = "jason.smith@ntu.ac.uk"},
+    {name = "Michael Wolfgang Reimann", email = "mwr@reimann.science"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "tables>3.8",
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "progressbar==2.5",
+    "tqdm",
+    "pyflagser",
+    "pyflagsercount>=0.2.41",
+    "networkx",
+    "scikit-network",
+    "ipykernel>=6.29.5,<7",
+]
+
+[project.urls]
+Documentation = "https://openbraininstitute.github.io/connectome-analysis/"
+Homepage = "https://openbraininstitute.github.io/connectome-analysis/"
+Repository = "https://github.com/openbraininstitute/connectome-analysis.git"
+
+[tool.scikit-build]
+cmake.source-dir = "src/generate_model"
+wheel.packages = ["src/connalysis"]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "mkdocstrings[python]>=0.18",
+    "mkdocs-material",
+    "pytest",
+    "pytest-github-actions-annotate-failures",
+    "pytest-cov",
+    "jupyter",
+    "seaborn",
+]
 
 [tool.isort]
 profile = "black"
