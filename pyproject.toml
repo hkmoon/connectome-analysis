@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "py_connectome_analysis"
-version = "1.0.3"
+version = "1.0.4"
 description = "Methods for network analysis of graphs coming from brain models and activity on them"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
