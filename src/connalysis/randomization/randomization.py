@@ -11,7 +11,7 @@
 import logging
 import numpy as np
 import scipy.sparse as sp
-import bigrandomgraphs as gm
+import generate_model as gm
 LOG = logging.getLogger("connectome-analysis-randomization")
 LOG.setLevel("INFO")
 logging.basicConfig(format="%(asctime)s %(levelname)-8s %(message)s",
