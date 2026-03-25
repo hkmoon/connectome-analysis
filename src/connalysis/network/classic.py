@@ -1,8 +1,20 @@
+# SPDX-FileCopyrightText: 2024 Blue Brain Project / EPFL
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
+import networkx as nx
+import numpy as np
+import pandas as pd
+from scipy.stats import hypergeom
+from scipy.stats import binom
+from scipy.linalg import eigvals
+import scipy.sparse as sp
+from scipy.spatial import KDTree
 #TODO: MODIFY THE IMPORTS TO EXTERNAL IMPORTS
 
+from .topology import node_degree, rc_submatrix, underlying_undirected_matrix
 
-def closeness_connected_components(adj, neuron_properties=[], directed=False, return_sum=True):
+def closeness_connected_components(adj, directed=False, return_sum=True):
     """Compute the closeness of each connected component of more than 1 vertex
     
     Parameters
@@ -21,11 +33,10 @@ def closeness_connected_components(adj, neuron_properties=[], directed=False, re
         A single array( if `return_sum=True`) or a list of arrays of shape `n`, containting closeness of vertices in that component, or 0 if the vertex is not in the component. Closeness cannot be zero otherwise.
 
     """
-    import numpy as np
     from sknetwork.ranking import Closeness
     from scipy.sparse.csgraph import connected_components
 
-    matrix=adj.toarray()
+    matrix = sp.csr_matrix(adj)
     if directed:
         n_comp, comp = connected_components(matrix, directed=True, connection="strong")
     else:
@@ -38,9 +49,9 @@ def closeness_connected_components(adj, neuron_properties=[], directed=False, re
     for i in range(n_comp):
         c = np.zeros(n)
         idx = np.where(comp == i)[0]
-        sub_mat = matrix[np.ix_(idx, idx)].tocsr()
+        sub_mat = matrix[np.ix_(idx, idx)]
         if sub_mat.getnnz() > 0:
-            c[idx] = closeness.fit_transform(sub_mat)
+            c[idx] = closeness.fit_predict(sub_mat)
             all_c.append(c)
     if return_sum:
         all_c = np.array(all_c)
@@ -48,53 +59,199 @@ def closeness_connected_components(adj, neuron_properties=[], directed=False, re
     else:
         return all_c
 
-def communicability(adj, neuron_properties):
-    pass
+def connected_components(adj,directed=True, connection='weak', return_labels=False):
+    """Returns a list of the size of the connected components of the graph
+    
+    Parameters
+    ----------
+    adj : array_like or sparse matrix
+        Adjacency matrix of the graph
+    directed : bool
+        If `True`, will be compute connected components of the directed graph
+    connection : str {'weak', 'strong'}
+        If `weak`, it will compute the connected components of the underlying undirected graph. 
+        If `strong`, it will compute strongly connected components of the directed graph.
+    return_labels : bool
+        If `True`, will return the labels of the connected components
 
-def closeness(adj, neuron_properties, directed=False):
-    """Compute closeness centrality using sknetwork on all connected components or strongly connected
-    component (if directed==True)"""
-    return closeness_connected_components(adj, directed=directed)
+    Returns
+    -------
+    array_like
+        A list of the size of the connected components of the graph. 
+        If return_labels == True, it also returns the list of labels of the connected components.
+    """
 
-def centrality(self, sub_gids, kind="closeness", directed=False):
-    """Compute a centrality of the graph. `kind` can be 'betweeness' or 'closeness'"""
-    if kind == "closeness":
-        return self.closeness(sub_gids, directed)
+    matrix = sp.csr_matrix(adj)
+
+    comps=sp.csgraph.connected_components(matrix , directed=directed, 
+                                          connection=connection, return_labels=True)
+    comps_size=np.unique(comps[1], return_counts=True)[1]
+    if return_labels:
+        return comps_size, comps[1]
     else:
-        ValueError("Kind must be 'closeness'!")
-        #TODO:  Implement betweeness
+        return comps_size
 
-def connected_components(adj,neuron_properties=[]):
-    """Returns a list of the size of the connected components of the underlying undirected graph on sub_gids,
-    if None, compute on the whole graph"""
-    import networkx as nx
-    import numpy as np
+def core_number(adj):
+    """Returns the core number for each node.
 
-    matrix=adj.toarray()
-    matrix_und = np.where((matrix+matrix.T) >= 1, 1, 0)
-    # TODO: Change the code from below to scipy implementation that seems to be faster!
-    G = nx.from_numpy_matrix(matrix_und)
-    return [len(c) for c in sorted(nx.connected_components(G), key=len, reverse=True)]
+        Parameters
+        ----------
+        adj : array_like or sparse matrix
+            Adjacency matrix of the graph
+        directed : bool
+            If `True`, will be compute connected components of the directed graph
+        connection : str {'weak', 'strong'}
+            If `weak`, it will compute the connected components of the underlying undirected graph. 
+            If `strong`, it will compute strongly connected components of the directed graph.
+        return_labels : bool
+            If `True`, will return the labels of the connected components
 
-def core_number(adj, neuron_properties=[]):
-    """Returns k core of directed graph, where degree of a vertex is the sum of in degree and out degree"""
+        Returns
+        -------
+        dict
+            A dictionary with keys the indices of the nodes of adj and values their corresponding core number.
+
+        Notes
+        -----
+        The k-core of a graph is the maximal subgraph that contains nodes of degree k or more in the induced subgraph.
+        The core number of a node is the largest value k of a k-core containing that node.
+        For directed graphs the total node degree is use, i.e., the sum of in-degree + out-degree.
+    """
     # TODO: Implement directed (k,l) core and k-core of underlying undirected graph (very similar to this)
-    import networkx
-    G = networkx.from_numpy_matrix(adj.toarray())
-    # Very inefficient (returns a dictionary!). TODO: Look for different implementation
-    return networkx.algorithms.core.core_number(G)
-
     # TODO: Filtered simplex counts with different weights on vertices (coreness, intersection)
-    #  or on edges (strength of connection).
+    #  or on edges (strength of connection).    
+    adj=sp.csr_matrix(adj)
+    G = nx.from_scipy_sparse_array(adj)
+    # Very inefficient (returns a dictionary!). TODO: Look for different implementation
+    return nx.algorithms.core.core_number(G)
 
-def density(adj, neuron_properties=[]):
-    #Todo: Add #cells/volume as as possible spatial density
-    adj=adj.astype('bool').astype('int')
-    return m.sum() / np.prod(m.shape)
+
+def density(adj, type="directed", skip_symmetry_check=False):
+    """Returns the density of a matrix.
+
+        Parameters
+        ----------
+        adj : array_like or sparse matrix
+            Adjacency matrix of the graph
+        type : str {'directed', 'undirected', 'reciprocal'}
+            The type of the graph considered for the computation.
+            If 'directed', the density as a directed graph is computed.
+            If 'undirected', the density of the underlying undirected graph is computed.
+            If 'reciprocal', the density of the underlying reciprocal graph is computed.
+        skip_symmetry_check : bool
+            If `True`, it will skip the check for symmetry of the matrix.
+
+        Returns
+        -------
+        float
+            The density of the graph.
+    """
+    assert adj.shape[0] == adj.shape[1], "The matrix must be square!"
+    n=adj.shape[0]
+    adj=sp.csr_matrix(adj).astype('bool')
+    if type=="undirected":
+        if not skip_symmetry_check:
+            if (adj!=adj.T).nnz >0:
+                print("The graph is directed. Taking the underlying undirected graph")
+                adj=underlying_undirected_matrix(adj)
+    if type=="reciprocal":
+        adj=rc_submatrix(adj)
+    return adj.sum() /  (n*(n-1))
+
+
+def get_pairs_within(m, v, cols=["x", "y"], max_dist=100):
+    """Returns a matrix of the paris of nodes within distance `max_dist` of each other.
+
+        Parameters
+        ----------
+        m : array or sparse matrix
+            Adjacency matrix of the graph
+        v : DataFrame or tuple
+            DataFrame with the coordinates of the nodes if m is square and has the same source and target nodes. 
+            If a tuple is passed, it should contain two DataFrames, one for the source nodes and one for the target nodes.        
+        cols : list
+            Columns of the DataFrame containing the coordinates of the nodes.
+        max_dist : float
+            Maximum distance between nodes to be considered connected.        
+
+        Returns
+        -------
+        sparse matrix
+            Boolean matrix with 1 indicating the pairs of nodes within `max_dist` of each other, 
+            excluding the diagonal for square matrices.
+    """
+    if isinstance(v, tuple):
+        vpre, vpost = v
+    else:
+        vpre = v; vpost = v
+    tree = KDTree(vpre[cols])
+    pairs = tree.query_ball_point(vpost[cols], max_dist)
+    indptr = np.cumsum([0] + [len(_x) for _x in pairs])
+    pairs_mat = sp.csc_matrix((np.ones(indptr[-1], dtype=bool),
+                                   np.hstack(pairs), indptr),
+                                   shape=m.shape)
+    if not isinstance(v,tuple):
+        pairs_mat.setdiag(0) # Don't consider edges from i to i when pre and post subpopulations are the same
+    if indptr[-1] == 0:
+        return np.nan
+    return pairs_mat.astype(bool)
+
+
+def connection_probability_within(m, v, cols=["x", "y"], max_dist=100, type='directed', skip_symmetry_check= False):
+    """Returns the average density of submatrices of nodes within distance `max_dist` of each node in `m`.
+
+        Parameters
+        ----------
+        m : array or sparse matrix
+            Adjacency matrix of the graph
+        v : DataFrame or tuple
+            DataFrame with the coordinates of the nodes if m is square and has the same pre and post nodes. 
+            If a tuple is passed, it should contain two DataFrames, one for the source nodes and one for the target nodes.
+        cols : list
+            Columns of the DataFrame containing the coordinates of the nodes.
+        max_dist : float
+            Maximum distance between nodes to be considered connected.        
+        type : str {'directed', 'undirected', 'reciprocal'}
+            The type of the graph considered for the computation.
+            If 'directed', the density as a directed graph is computed.
+            If 'undirected', the density of the underlying undirected graph is computed. Only possible if the matrix is square.
+            If 'reciprocal', the density of the underlying reciprocal graph is computed. Only possible if the matrix is square.
+        skip_symmetry_check : bool
+            If `True`, it will skip the check for symmetry of the matrix.
+
+        Returns
+        -------
+        float
+            The average density of the submatrices.
+    """
+    # Get coordinates of nodes and their nearest neighbors
+    pairs_mat=get_pairs_within(m, v, cols=cols, max_dist=max_dist)
+    if pairs_mat is np.nan:
+        return np.nan
+    else:
+        if type=='reciprocal':
+            assert m.shape[0]==m.shape[1], "The matrix must be square to compute the reciprocal connectivity"
+            m=rc_submatrix(m).tocsc()
+        elif type=='undirected':
+            assert m.shape[0]==m.shape[1], "The matrix must be square to compute the undirected connectivity"
+            if not skip_symmetry_check:
+                if (m!=m.T).nnz >0:
+                    print("The graph is directed. Taking the underlying undirected graph")
+                    m=underlying_undirected_matrix(m)
+            m=sp.csc_matrix(m)
+        elif type=='directed':
+            m=sp.csc_matrix(m)
+        else:
+            print(type)
+            raise ValueError("Type must be 'directed', 'undirected' or 'reciprocal'")
+        return m[pairs_mat].astype(bool).mean() 
+
+
+
+###### TODO: Code in this block needs docstrings ######
 
 def __make_expected_distribution_model_first_order__(adj, direction="efferent"):
     #TODO: Document, utility function used in COMMON NEIGHBOURS ANALYSIS
-    from scipy.stats import hypergeom
     if direction == "efferent":
         N = adj.sum(axis=1).mean()
         M = adj.shape[1]
@@ -187,50 +344,8 @@ def common_neighbor_connectivity_bias(adj, neuron_properties=None, direction="ef
     mdl_distance = sm_result.params.get("Distance", 0.0)
     return pval, mdl_added / mdl_intercept, 100 * mdl_distance / mdl_intercept
 
-###Computing connection probabilities
 
-def connection_probability_within(adj, neuron_properties, max_dist=200, min_dist=0,
-                                  columns=["ss_flat_x", "ss_flat_y"]):
-    #TODO: Does neuron_properties here assumes the right data structure?
-    if isinstance(neuron_properties, tuple):
-        nrn_pre, nrn_post = neuron_properties
-    else:
-        nrn_pre = neuron_properties;
-        nrn_post = neuron_properties
-    D = distance.cdist(nrn_pre[columns], nrn_post[columns])
-    mask = (D > min_dist) & (D <= max_dist)  # This way with min_dist=0 a neuron with itself is excluded
-    return adj[mask].mean()
-
-
-def connection_probability(adj, neuron_properties):
-    #TODO: Does neuron_properties here assumes the right data structure?
-    exclude_diagonal = False
-    if isinstance(neuron_properties, tuple):
-        nrn_pre, nrn_post = neuron_properties
-        if len(nrn_pre) == len(nrn_post):
-            if (nrn_pre["gid"] == nrn_post["gid"]).all():
-                exclude_diagonal = True
-    else:
-        exclude_diagonal = True
-
-    if not exclude_diagonal:
-        return adj.astype(bool).mean()
-    assert adj.shape[0] == adj.shape[1], "Inconsistent shape!"
-    n_pairs = adj.shape[0] * (adj.shape[1] - 1)
-    return adj.astype(bool).sum() / n_pairs
-
-#TODO ADD CODE FROM CLUSTER TO COMPUTE PROBABILITY OF CONNECTION PER PATHWAY OR ANY OTHER PROPERTIE ON THE NEURON_PROPERTY.
-
-
-#TODO: Checked up to here ... clean the code below
-# ##Degree based analyses
-#TODO UPDATE THE RICH CLUB IMPLEMENTATION
-import numpy as np
-import pandas as pd
-from scipy.stats import hypergeom
-from scipy.stats import binom
-from scipy import sparse
-
+#TODO ADD CODE FROM CLUSTER OR WITH CONNECTOM UTILITIES CODE TO COMPUTE PROBABILITY OF CONNECTION PER PATHWAY OR ANY OTHER PROPERTIE ON THE NEURON_PROPERTY.
 
 def gini_curve(m, nrn, direction='efferent'):
     m = m.tocsc()
@@ -285,16 +400,33 @@ def _bin_degrees(degrees):
     ret_x = 0.5 * (bins[:-1] + bins[1:])
     return ret_x, udegrees, degrees
 
+###### TODO: End of block that needs docstrings ######
 
-def rich_club_curve(m, direction='efferent'):
-    m = m.tocsc()
-    if direction == 'afferent':
-        degrees = np.array(m.sum(axis=0)).flatten()
-    elif direction == 'efferent':
-        degrees = np.array(m.sum(axis=1)).flatten()
-    else:
-        raise Exception("Unknown value for argument direction: %s" % direction)
+def rich_club_curve(m, direction='TOTAL'):
+    """Compute the rich-club curve of the matrix m.
 
+    Parameters
+    ----------
+    m : array_like or sparse matrix
+        Adjacency matrix of the graph.
+    direction : str {'OUT', 'IN', 'TOTAL'}
+        'OUT' : Compute the rich-club curve for the out-degree.
+
+        'IN' : Compute the rich-club curve for the in-degree.
+        
+        'TOTAL' : Compute the rich-club curve for the total degree i.e., in-degree + out-degree.
+        
+    Returns
+    -------
+    Pandas series
+        With index the center of the binned degrees and values the rich club coefficient at that degree.
+    Notes
+    -----
+    The rich-club coefficient is a measure of the tendency of high-degree nodes to form tightly interconnected communities.
+    """
+    m = sp.csc_matrix(m)
+    if direction == 'TOTAL': direction = None 
+    degrees = node_degree(m, direction=direction)
     if m.dtype == bool:
         udegrees = np.arange(1, degrees.max() + 1)
         ret_x = udegrees
@@ -305,28 +437,48 @@ def rich_club_curve(m, direction='efferent'):
     mat_counter = lambda i: m[np.ix_(degrees >= i, degrees >= i)].sum()  # number of actual edges
     ret = (np.array([mat_counter(i) for i in udegrees]).astype(float)
            / np.array([edge_counter(i) for i in udegrees]))
-    return pd.Series(ret, index=ret_x)
+    return pd.Series(ret, index=pd.Index(ret_x, name="degree"))
 
 
-def efficient_rich_club_curve(M, direction="efferent", pre_calculated_richness=None, sparse_bin_set=False):
+def efficient_rich_club_curve(M, direction="TOTAL", pre_calculated_filtration=None, sparse_bin_set=False):
+    """Fast computation of the rich-club curve of the matrix M with respect to a degree filtration and possibly any filtration chosen by the user.
+
+    Parameters
+    ----------
+    M : array_like or sparse matrix
+        Adjacency matrix of the graph.
+    direction : str {'OUT', 'IN', 'TOTAL'}
+        'OUT' : Compute the rich-club curve for the out-degree.
+
+        'IN' : Compute the rich-club curve for the in-degree.
+        
+        'TOTAL' or None : Compute the rich-club curve for the total degree i.e., in-degree + out-degree.
+    pre_calculated_filtration : pandas series 
+        To provide user defined filtration values other than degree.  
+        The index are the nodes of M and values the filtration values.
+    sparse_bin_set : bool
+        If False, all integer values between 0 and the maximum degree/filtration value will be used to generate the bins. 
+        If True, unique values of the degrees/filtration will be used. 
+        This is useful when the degrees/filtration values are sparse over the whole range.
+    Returns
+    -------
+    Pandas series
+        With index the center of the binned degrees/filtration and values the rich club coefficient at that degree.
+    Notes
+    -----
+    The rich-club coefficient is a measure of the tendency of high-degree nodes (nodes with a high filtration value) to form tightly interconnected communities.
+    """
+    #TODO: Maybe expand the notes explaining this concept.
+    if pre_calculated_filtration is not None:
+        deg = pre_calculated_filtration
+    else:
+        if direction=="TOTAL": direction = None 
+        deg=node_degree(M,direction=direction)
     M = M.tocoo()
     shape = M.shape
     M = pd.DataFrame.from_dict({"row": M.row, "col": M.col})
-    if pre_calculated_richness is not None:
-        deg = pre_calculated_richness
-    elif direction == "efferent":
-        deg = M["row"].value_counts()
-    elif direction == "afferent":
-        deg = M["col"].value_counts()
-    elif direction == "both":
-        D = pd.DataFrame({'row': np.zeros(shape[0]), 'col': np.zeros(shape[0])}, np.arange(shape[0])[-1::-1])
-        D['row'] = D['row'] + M["row"].value_counts()
-        D['col'] = D['col'] + M["col"].value_counts()
-        D = D.fillna(0)
-        D = D.astype(int)
-        deg = D['row'] + D['col']
-    else:
-        raise ValueError()
+    
+    
 
     if sparse_bin_set == False:
         degree_bins = np.arange(deg.max() + 2)
@@ -350,6 +502,7 @@ def efficient_rich_club_curve(M, direction="efferent", pre_calculated_richness=N
 
     return pd.Series(cum_degrees / nrn_cum_pairs, degree_bins_rv)[::-1]
 
+###### TODO: This block needs docstrings ######
 
 def _analytical_expected_rich_club_curve(m, direction='efferent'):
     assert m.dtype == bool, "This function only works for binary matrices at the moment"
@@ -384,11 +537,9 @@ def _analytical_expected_rich_club_curve(m, direction='efferent'):
 
 
 def generate_degree_based_control(M, direction="efferent"):
-    """
-    A shuffled version of a connectivity matrix that aims to preserve degree distributions.
-    If direction = "efferent", then the out-degree is exactly preserved, while the in-degree is
-    approximately preseved. Otherwise it's the other way around.
-    """
+    # A shuffled version of a connectivity matrix that aims to preserve degree distributions.
+    # If direction = "efferent", then the out-degree is exactly preserved, while the in-degree is
+    # approximately preseved. Otherwise it's the other way around.
     if direction == "efferent":
         M = M.tocsr()
         idxx = np.arange(M.shape[1])
@@ -453,3 +604,303 @@ def normalized_rich_club_curve(m, direction='efferent', normalize='std',
 def rich_club_coefficient(m, **kwargs):
     Bn = normalized_rich_club_curve(m, normalize='std', **kwargs).values
     return np.nanmean(Bn)
+
+###### TODO: End of block that needs docstrings ######
+
+def ccc(matrix):
+    """Computes the classical clustering coefficient of a directed graph
+
+    Parameters
+    ----------
+    matrix : numpy array
+        the adjaceny matrix of an unweighted graph
+
+    Returns
+    -------
+    Series
+        The index is the node index in ``matrix`` and the value is the clustering coefficient of the node. 
+
+    References
+    ----------
+    The formula is taken from the following paper.
+
+    [1] G. Fagiolo, "Clustering in complex directed networks", 2006;
+            [DOI: 10.1103/PhysRevE.76.026107]().
+
+    [2] Conceição, Pedro, et al. "An application of neighbourhoods in digraphs to the classification of binary dynamics.", 2022
+            [DOI: 10.1162/netn_a_00228](). 
+
+    """
+    # We only analyze the udnerlying connectivity not the weights
+    matrix=matrix.astype(bool).astype(int)
+    # Numerator 
+    if sp.issparse(matrix):
+        dense_matrix = matrix + matrix.transpose()
+        numerator = 0.5*np.diag((dense_matrix ** 3).toarray())
+    else:
+        numerator = 0.5*np.diag(np.linalg.matrix_power(matrix + np.transpose(matrix), 3))
+    # Denominator
+    deg = node_degree(matrix) 
+    denominator = (deg*(deg-1)-2*rc_submatrix(matrix).toarray().sum(axis=0))
+    return numerator/denominator
+
+def largest_strongly_connected_component(adjacency_matrix):
+    """Computes the largest strongly connected component of the graph with adjacency matrix adjacency_matrix,
+        and returns the adjacency matrix of said component
+
+    Parameters
+    ----------
+    adjacency_matrix : numpy array
+        the adjaceny matrix of the DiGraph as a numpy array
+
+
+    Returns
+    -------
+    numpy array
+        The adjacency matrix of the largest strongly connected component
+
+    """
+    if sp.issparse(adjacency_matrix):
+        adjacency_matrix = adjacency_matrix.toarray()
+    current_tribe_nx = np_to_nx(adjacency_matrix)
+    largest_comp = max(nx.strongly_connected_components(current_tribe_nx), key=len)
+    current_tribe_strong_nx = current_tribe_nx.subgraph(largest_comp)
+    current_tribe_strong = nx_to_np(current_tribe_strong_nx)
+    return current_tribe_strong
+
+
+def nx_to_np(directed_graph):
+    """Converts networkx digraph to numpy array of the adjacency matrix 
+
+    Parameters
+    ----------
+    directed_graph : networkx DiGraph
+        a directed graph
+
+    Returns
+    -------
+    numpy array
+        the adjaceny matrix of the DiGraph as a numpy array
+    """
+    return nx.to_numpy_array(directed_graph,dtype=int)
+
+
+def np_to_nx(adjacency_matrix):
+    """Converts numpy array of an adjacency matrix to a networkx digraph
+
+    Parameters
+    ----------
+    adjacency_matrix : numpy array
+        the adjaceny matrix of the DiGraph as a numpy array
+
+
+    Returns
+    -------
+    networkx DiGraph
+            a directed graph
+
+    """
+    return nx.from_numpy_array(adjacency_matrix,create_using=nx.DiGraph)
+
+
+# #*************************************************************************#
+# #Code taken from TriDy
+# #TODO: NEEDS CHECKING AND DOCUMENTATION
+
+# ##
+# ## HELPER FUNCTIONS (SPECTRAL)
+# ##
+
+# def spectral_gap(matrix, thresh=10, param='low'):
+# #  In: matrix
+# # Out: float
+#     current_spectrum = spectrum_make(matrix)
+#     current_spectrum = spectrum_trim_and_sort(current_spectrum, threshold_decimal=thresh)
+#     return spectrum_param(current_spectrum, parameter=param)
+
+
+
+# def spectrum_make(matrix):
+# #  In: matrix
+# # Out: list of complex floats
+#     assert np.any(matrix) , 'Error (eigenvalues): matrix is empty'
+#     eigenvalues = eigvals(matrix)
+#     return eigenvalues
+
+
+
+# def spectrum_trim_and_sort(spectrum, modulus=True, threshold_decimal=10):
+# #  In: list of complex floats
+# # Out: list of unique (real or complex) floats, sorted by modulus
+#     if modulus:
+#         return np.sort(np.unique(abs(spectrum).round(decimals=threshold_decimal)))
+#     else:
+#         return np.sort(np.unique(spectrum.round(decimals=threshold_decimal)))
+
+
+
+# def spectrum_param(spectrum, parameter):
+# #  In: list of complex floats
+# # Out: float
+#     assert len(spectrum) != 0 , 'Error (eigenvalues): no eigenvalues (spectrum is empty)'
+#     if parameter == 'low':
+#         if spectrum[0]:
+#             return spectrum[0]
+#         else:
+#             assert len(spectrum) > 1 , 'Error (low spectral gap): spectrum has only zeros, cannot return nonzero eigval'
+#             return spectrum[1]
+#     elif parameter == 'high':
+#         assert len(spectrum) > 1 , 'Error (high spectral gap): spectrum has one eigval, cannot return difference of top two'
+#         return spectrum[-1]-spectrum[-2]
+#     elif parameter == 'radius':
+#         return spectrum[-1]
+
+
+# ##
+# ## NONSPECTRAL PARAMETER FUNCTIONS
+# ##
+
+
+
+
+# # degree type parameters
+
+# # tribe size
+
+# def tribe_size(matrix):
+#     return len(matrix)
+
+# # reciprocal connections
+
+# def reciprocal_connections(matrix, chief_only=False):
+#     #TODO: MERGE THIS WITH RC FUNCTION
+#     if chief_only:
+#         rc_count = np.count_nonzero(np.multiply(matrix[0],np.transpose(matrix)[0]))
+#     else:
+#         rc_count = np.count_nonzero(np.multiply(matrix,np.transpose(matrix)))//2
+#     return rc_count
+
+
+# ##
+# ## SPECTRAL PARAMETER FUNCTIONS
+# ##
+
+
+# # adjacency spectrum
+
+# def asg(matrix, gap='high'):
+#     return spectral_gap(matrix, param=gap)
+
+
+# # transition probability spectrum
+
+# def tpsg(matrix, in_deg=False, gap='high'):
+# #  in: tribe matrix
+# # out: float
+#     current_matrix = tps_matrix(matrix, in_deg=in_deg)
+#     return spectral_gap(current_matrix, param=gap)
+
+# def tps_matrix(matrix, in_deg=False):
+# #  in: tribe matrix
+# # out: transition probability matrix
+#     current_size = len(matrix)
+#     if in_deg:
+#         degree_vector = node_degree(matrix, direction='IN').values
+#     else:
+#         degree_vector = node_degree(matrix, direction='OUT').values
+#     inverted_degree_vector = [0 if not d else 1/d for d in degree_vector]
+#     return np.matmul(np.diagflat(inverted_degree_vector),matrix)
+
+
+# # chung laplacian spectrum
+# # source 1: Laplacians and the Cheeger inequality for directed graph (Fan Chung, 2005)
+# # source 2: https://networkx.org/documentation/stable/reference/generated/networkx.linalg.laplacianmatrix.directed_laplacian_matrix.html
+
+# def clsg(matrix, is_strongly_conn=False, gap='low'):
+# #  in: tribe matrix
+# # out: float
+#     chung_laplacian_matrix = cls_matrix_fromadjacency(matrix, is_strongly_conn=is_strongly_conn)
+#     return spectral_gap(chung_laplacian_matrix, param=gap)
+
+# def cls_matrix_fromadjacency(matrix, is_strongly_conn=False):
+# #  in: numpy array
+# # out: numpy array
+#     matrix_nx = np_to_nx(matrix)
+#     return cls_matrix_fromdigraph(matrix_nx, matrix=matrix, matrix_given=True, is_strongly_conn=is_strongly_conn)
+
+# def cls_matrix_fromdigraph(digraph, matrix=np.array([]), matrix_given=False, is_strongly_conn=False):
+# #  in: networkx digraph
+# # out: numpy array
+#     digraph_sc = digraph
+#     matrix_sc = matrix
+#     # Make sure is strongly connected
+#     if not is_strongly_conn:
+#         largest_comp = max(nx.strongly_connected_components(digraph), key=len)
+#         digraph_sc = digraph.subgraph(largest_comp)
+#         matrix_sc = nx_to_np(digraph_sc)
+#     elif not matrix_given:
+#         matrix_sc = nx_to_np(digraph_sc)
+#     # Degeneracy: scc has size 1
+#     if not np.any(matrix_sc):
+#         return np.array([[0]])
+#     # Degeneracy: scc has size 2
+#     elif np.array_equal(matrix_sc,np.array([[0,1],[1,0]],dtype=int)):
+#         return np.array([[1,-0.5],[-0.5,1]])
+#     # No degeneracy
+#     else:
+#         return nx.directed_laplacian_matrix(digraph_sc)
+
+
+# # bauer laplacian spectrum
+# # source: Normalized graph Laplacians for directed graphs (Frank Bauer, 2012)
+
+# def blsg(matrix, reverse_flow=False, gap='high'):
+# #  in: tribe matrix
+# # out: float
+#     bauer_laplacian_matrix = bls_matrix(matrix, reverse_flow=reverse_flow)
+#     return spectral_gap(bauer_laplacian_matrix, param=gap)
+
+# def bls_matrix(matrix, reverse_flow=False):
+# #  in: tribe matrix
+# # out: bauer laplacian matrix
+#     #non_quasi_isolated = [i for i in range(len(matrix)) if matrix[i].any()]
+#     #matrix_D = np.diagflat([np.count_nonzero(matrix[nqi]) for nqi in non_quasi_isolated])
+#     #matrix_W = np.diagflat([np.count_nonzero(np.transpose(matrix)[nqi]) for nqi in non_quasi_isolated])
+#     #return np.subtract(np.eye(len(non_quasi_isolated),dtype=int),np.matmul(inv(matrix_D),matrix_W))
+#     current_size = len(matrix)
+#     return np.subtract(np.eye(current_size,dtype='float64'),tps_matrix(matrix, in_deg=(not reverse_flow)))
+
+
+
+# ##
+# ## TO BE DELETED ONCE EVERYTHING WORKS
+# ##
+
+
+# # # degree
+# # def degree(chief_index, matrix, vertex_index=0):
+# #     current_tribe = tribe(chief_index, matrix)
+# #     return degree_adjacency(current_tribe, vertex_index=vertex_index)
+
+# # def degree_adjacency(matrix, vertex_index=0):
+# #     return in_degree_adjacency(matrix, vertex_index=vertex_index)+out_degree_adjacency(matrix, vertex_index=vertex_index)
+
+
+# # # in-degree
+# # def in_degree(chief_index, matrix, vertex_index=0):
+# #     current_tribe = tribe(chief_index, matrix)
+# #     return in_degree_adjacency(current_tribe, vertex_index=vertex_index)
+
+# # def in_degree_adjacency(matrix, vertex_index=0):
+# #     return np.count_nonzero(np.transpose(matrix)[vertex_index])
+
+
+# # # out-degree
+# # def out_degree(chief_index, matrix, vertex_index=0):
+# #     current_tribe = tribe(chief_index, matrix)
+# #     return out_degree_adjacency(current_tribe, vertex_index=vertex_index)
+
+
+
+# # def out_degree_adjacency(matrix, vertex_index=0):
+# #     return np.count_nonzero(matrix[vertex_index])

@@ -1,6 +1,10 @@
+# SPDX-FileCopyrightText: 2024 Blue Brain Project / EPFL
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Network analysis functions based on topological constructions
 #
-# Author(s): D. Egas Santander, M. Santoro, J. Smith, V. Sood
+# Author(s): D. Egas Santander, M. Santoro, JP. Smith, V. Sood
 # Last modified: 03/2023
 
 #TODO unweighted: convex hull, combinatorial ricci,
@@ -12,15 +16,20 @@ import numpy as np
 import pandas as pd
 import logging
 import scipy.sparse as sp
+import pyflagsercount
+import pyflagser
+import math
+
+from .local import neighbourhood
 
 #Imports not used as global imports, check what can be removed.
-import sys
-import tempfile
-import pickle
-from functools import partial
-from pathlib import Path
-from tqdm import tqdm
-from typing import List
+# import sys
+# import tempfile
+# import pickle
+# from functools import partial
+# from pathlib import Path
+# from tqdm import tqdm
+# from typing import List
 
 
 LOG = logging.getLogger("connectome-analysis-topology")
@@ -105,7 +114,7 @@ def _flagser_counts(adjacency,
                     max_simplices=False,
                     count_node_participation=False,
                     list_simplices=False,
-                    threads=1,max_dim=-1):
+                    threads=8,max_dim=-1, edge_containment=False, vertices_todo=''):
     """Call package `pyflagsercount's flagser_count` method that can be used to compute
     some analyses, getting counts of quantities such as simplices,
     or node-participation (a.k.a. `containment`)
@@ -120,7 +129,9 @@ def _flagser_counts(adjacency,
                                                   max_simplices=max_simplices,
                                                   containment=count_node_participation,
                                                   return_simplices=list_simplices,
-                                                  threads=threads,max_dim=max_dim)
+                                                  threads=threads,max_dim=max_dim,
+                                                  edge_containment=edge_containment,
+                                                  vertices_todo=vertices_todo)
 
     counts =  {"euler": flagser_counts.pop("euler"),
                "simplex_counts": _series_by_dim(flagser_counts.pop("cell_counts"),
@@ -259,16 +270,17 @@ def node_k_degree(adj, node_properties=None, direction=("IN", "OUT"), max_dim=-1
             if "OUT" in direction:
                 # getting source participation across dimensions
                 x, y = np.unique(np.array(flagser_out['simplices'][dim])[:, 0], return_counts=True)
-                generalized_degree[f'{dim}_out_degree'] = pd.Series(y, index=x)
+                generalized_degree[f'{dim-1}_out_degree'] = pd.Series(y, index=x)
             if "IN" in direction:
                 # getting sink participation across dimensions
                 x, y = np.unique(np.array(flagser_out['simplices'][dim])[:, dim], return_counts=True)
-                generalized_degree[f'{dim}_in_degree'] = pd.Series(y, index=x)
+                generalized_degree[f'{dim-1}_in_degree'] = pd.Series(y, index=x)
         return generalized_degree.fillna(0)
 
 
 def simplex_counts(adj, node_properties=None,max_simplices=False,
-                   threads=1,max_dim=-1, simplex_type='directed', **kwargs):
+                   threads=8,max_dim=-1, simplex_type='directed', nodes=None, **kwargs):
+    # TODO: ADD TRANSPOSE
     """Compute the number of simplex motifs in the network adj.
     Parameters
     ----------
@@ -291,6 +303,9 @@ def simplex_counts(adj, node_properties=None,max_simplices=False,
         ’undirected’ - simplices in the underlying undirected graph
 
         ’reciprocal’ - simplices in the undirected graph of reciprocal connections
+    nodes : 1d array or None(default)
+        Restrict to list only the simplices whose source node is in nodes.  If None list all simplices.
+        This only makes sense for directed simplices.
 
     Returns
     -------
@@ -329,14 +344,32 @@ def simplex_counts(adj, node_properties=None,max_simplices=False,
     elif simplex_type=="reciprocal":
         adj=sp.triu(rc_submatrix(adj)) #symmtrize and keep upper triangular only
 
-    flagser_counts = _flagser_counts(adj, threads=threads, max_simplices=max_simplices, max_dim=max_dim)
+    # Only the simplices that have sources stored in this temporary file will be considered.
+    # This only makes sense for directed simplices
+    if not nodes is None:
+        assert simplex_type=='directed', "Sub-selection of source nodes only makes sense for directed simplices"
+        import tempfile
+        import os
+        tmp_file = tempfile.NamedTemporaryFile(delete=False)
+        vertices_todo = tmp_file.name + ".npy"
+        np.save(vertices_todo, nodes, allow_pickle=False)
+    else:
+        vertices_todo = ''
+
+    # Count simplices
+    flagser_counts = _flagser_counts(adj, threads=threads, max_simplices=max_simplices, max_dim=max_dim, vertices_todo=vertices_todo)
+    # Remove temporary file
+    if not nodes is None:
+        os.remove(vertices_todo)
+
     if max_simplices:
         return flagser_counts["max_simplex_counts"]
     else:
         return flagser_counts["simplex_counts"]
 
+
 def normalized_simplex_counts(adj, node_properties=None,
-                   max_simplices=False, threads=1,max_dim=-1,
+                   max_simplices=False, threads=8,max_dim=-1,
                    **kwargs):
     """Compute the ratio of directed/undirected simplex counts normalized to be between 0 and 1.
     See simplex_counts and undirected_simplex_counts for details.
@@ -384,7 +417,7 @@ def normalized_simplex_counts(adj, node_properties=None,
 
 
 def node_participation(adj, node_properties=None, max_simplices=False,
-                       threads=1,max_dim=-1,simplex_type='directed',**kwargs):
+                       threads=8,max_dim=-1,simplex_type='directed',**kwargs):
     """Compute the number of simplex motifs in the network adj each node is part of.
     See simplex_counts for details.
     Parameters
@@ -437,6 +470,66 @@ def node_participation(adj, node_properties=None, max_simplices=False,
     flagser_counts = _flagser_counts(adj, count_node_participation=True, threads=threads,
                                      max_simplices=max_simplices, max_dim=max_dim)
     return flagser_counts["node_participation"]
+
+def edge_participation(adj, node_properties=None, max_simplices=False,
+                       threads=8,max_dim=-1,simplex_type='directed', return_simplex_counts=False, verbose=False, **kwargs):
+    """Compute the number of simplex motifs in the network adj each edge is part of.
+    See simplex_counts for details.
+    Parameters
+    ----------
+    adj : 2d array or sparse matrix
+        Adjacency matrix of the directed network.  A non-zero entry adj[i,j] implies there is an edge from i to j.
+        The matrix can be asymmetric, but must have 0 in the diagonal.
+    node_properties : dataframe
+        Data frame of neuron properties in adj.  Only necessary if used in conjunction with TAP or connectome utilities.
+    max_simplices : bool
+        If False (default) counts all simplices in adj.
+        If True counts only maximal simplices i.e., simplex motifs that are not contained in higher dimensional ones.
+    max_dim : int
+        Maximal dimension up to which simplex motifs are counted.
+        The default max_dim = -1 counts all existing dimensions.  Particularly useful for large or dense graphs.
+    simplex_type : string
+        Type of simplex to consider:
+
+        ’directed’ - directed simplices
+
+        ’undirected’ - simplices in the underlying undirected graph
+
+        ’reciprocal’ - simplices in the undirected graph of reciprocal connections
+
+    Returns
+    -------
+    data frame
+        Indexed by the edges in adj and with columns de dimension for which node participation is counted
+
+    Raises
+    -------
+    AssertionError
+        If adj has non-zero entries in the diagonal which can produce errors.
+    AssertionError
+        If adj is not square.
+    """
+
+    adj=sp.csr_matrix(adj).astype('bool')
+    assert np.count_nonzero(adj.diagonal()) == 0, 'The diagonal of the matrix is non-zero and this may lead to errors!'
+    N, M = adj.shape
+    assert N == M, 'Dimension mismatch. The matrix must be square.'
+
+
+    #Symmetrize matrix if simplex_type is not 'directed'
+    if simplex_type=='undirected':
+        adj=sp.triu(underlying_undirected_matrix(adj)) #symmtrize and keep upper triangular only
+    elif simplex_type=="reciprocal":
+        adj=sp.triu(rc_submatrix(adj)) #symmtrize and keep upper triangular only
+
+    flagser_out = pyflagsercount.flagser_count(adj, edge_containment=True, threads=threads,
+                                     max_simplices=max_simplices, max_dim=max_dim)
+    logging.info("Done running flagser")
+    e_contain = pd.DataFrame.from_dict(flagser_out['edge_contain_counts'], orient="index").fillna(0).astype(int)
+    if return_simplex_counts:
+        return e_contain, flagser_out["cell_counts"]
+    else:
+        return e_contain
 
 def list_simplices_by_dimension(adj, node_properties=None, max_simplices=False,max_dim=-1,nodes=None,
                                 verbose=False, simplex_type='directed', **kwargs):
@@ -537,7 +630,7 @@ def list_simplices_by_dimension(adj, node_properties=None, max_simplices=False,m
         simplices[1] = np.stack([coom.row[mask], coom.col[mask]]).T
     return simplices
 
-def in_degree_from_pop(adj, source_pop, max_simplices=False,threads=1, max_dim=-1, ** kwargs):
+def in_degree_from_pop(adj, source_pop, max_simplices=False,threads=8, max_dim=-1, ** kwargs):
     # TODO: DO THE OUTDEGREE VERSION
     # TODO: Get participation directly from flagsercount via vertices to do?
     """Compute generalized in-degree of nodes source_pop onto the rest of the nodes in adj.
@@ -576,7 +669,7 @@ def in_degree_from_pop(adj, source_pop, max_simplices=False,threads=1, max_dim=-
     return degs
 
 def cross_col_k_in_degree(adj_cross, adj_source, max_simplices=False,
-                          threads=1,max_dim=-1,**kwargs):
+                          threads=8,max_dim=-1,**kwargs):
     #TODO: DO THE OUTDEGREE VERSION
     #TODO: Get participation directly from flagsercount via vertices to do?
     """Compute generalized in-degree of nodes in adj_target from nodes in adj_source.
@@ -698,7 +791,7 @@ def betti_counts(adj, node_properties=None,
 
     See Also
     --------
-    [simplex_counts](network.md#src.connalysis.network.topology.simplex_counts) :
+    [simplex_counts](network_topology.md#src.connalysis.network.topology.simplex_counts) :
     A function that counts the simplices forming the complex from which bettis are count.
     Simplex types are described there in detail.
 
@@ -863,7 +956,8 @@ def _generate_abstract_edges_in_simplices(dim, position="all"):
     return edges_abstract
 
 
-def extract_submatrix_of_simplices(simplex_list, N, position="all"):
+#def extract_submatrix_of_simplices(simplex_list, N, position="all"):
+def extract_submatrix_from_simplex_list(simplex_list, N, position="spine"):
     """Generate binary submatrix of NxN matrix of edges in simplex list.
 
     Parameters
@@ -877,16 +971,18 @@ def extract_submatrix_of_simplices(simplex_list, N, position="all"):
     position: str
         Position of the edges to extract
 
-        'all': all edges of the simplex
+        'all': all edges of the simplex (it is more efficient to do this with ``extract_submatrix_from_edge_par``)
 
         'spine': edges along the spine of the simplex
         (only makes sense for directed simplices)
 
     Returns
     -------
-    csr bool matrix
+    coo bool matrix
         Matrix with of shape (N,N) with entries `True` corresponding to edges in simplices.
     """
+    if position=="all":
+        logging.warning("For edges in any position it is more efficient to use extract_submatrices_from_edge_participation")
     if simplex_list.shape[0] == 0:
         return sp.csr_matrix((N, N), dtype=bool)  # no simplices in this dimension
     else:
@@ -894,16 +990,52 @@ def extract_submatrix_of_simplices(simplex_list, N, position="all"):
         edges_abstract = _generate_abstract_edges_in_simplices(dim,
                                                                position=position)  # abstract list of edges to extract from each simplex
         edges = np.unique(np.concatenate([simplex_list[:, edge] for edge in edges_abstract]), axis=0)
-        return (sp.coo_matrix((np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])), shape=(N, N))).tocsr().astype(bool)
+        return (sp.coo_matrix((np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])), shape=(N, N))).astype(bool)
 
 
-def get_k_skeleta_graph(adj=None, max_simplices=False, dimensions=None, simplex_type='directed',
-                        simplex_list=None, N=None, position="all",
-                        **kwargs):
-    # Choose only some dimensions???
-    # check max dim is consistent with simplex_list only used if adj is given and must be >0
-    # adj only used is simplex list is none
-    # Add requirement to give adj is direction is undirected and multiply adj by mat!!!
+def extract_submatrices_from_edge_participation(edge_par, N, dims=None, thresh=1):
+    """Generate binary submatrix of an NxN matrix of edges with edge participation greater than thresh.
+
+    Parameters
+    ----------
+    edge_par: DataFrame
+        DataFrame with edge participation values formatted as the output of ``edge_participation`` i.e.,
+        indexed by the edges in adj and with columns de dimension for which edge participation is counted
+    dims: list of ints
+        dimensions of the simplices to consider, if ``None`` all positive dimensions are considered
+    N: int
+        Number of nodes in original graph defining the NxN matrix.
+        The indices of edge_par must be smaller than N
+    thresh: int
+        Threshold value at which to consider an edge.  If thresh=1 all edges that
+        elong to at least one simplex are considered.
+
+    Returns
+    -------
+    dict
+        keys: dimensions
+        values: sparse binary matrices in coo format of shape (N,N) with entries `True` corresponding to edges
+        that belong to at least thresh simplices of the dimension in its corresponding key.
+    """
+
+    if dims is None: dims = edge_par.columns
+    dims = np.array(dims)
+    assert np.isin(dims,
+                   edge_par.columns).all(), "The array dims shoulds be a subset of the columns of edge participation"
+    mats = {}
+    # Reformat edge_participation (Maybe already do this in the output of edge_participation?)
+    df = edge_par.set_index(keys=pd.MultiIndex.from_tuples(edge_par.index)).reset_index(names=["row", "col"])
+    for dim in dims:
+        edges = df[df[dim] >= thresh]
+        mats[f'dimension_{dim}'] = sp.coo_matrix((np.ones(len(edges)), (edges.row, edges.col)), shape=(N, N)).astype(
+            bool)
+    return mats
+
+
+def get_k_skeleta_graph(adj=None, dimensions=None, max_simplices=False,
+                        N=None, simplex_list=None, edge_par=None,
+                        simplex_type='directed', position="all",
+                        threads=8, **kwargs):
     """Return the edges of the (maximal) k-skeleton of the flag complex of adj for all k<= max_dim in the position determined
     by position.
     If simplex list are provided, it will compute the edges directly from these and not use adj,
@@ -943,6 +1075,8 @@ def get_k_skeleta_graph(adj=None, max_simplices=False, dimensions=None, simplex_
 
         'spine': edges along the spine of the simplex
         (only makes sense if simplices are directed)
+    threads: int
+        Number of threads into which the computation should be parallelized
 
     Returns
     -------
@@ -966,88 +1100,61 @@ def get_k_skeleta_graph(adj=None, max_simplices=False, dimensions=None, simplex_
 
     """
 
-    assert not (adj is None and simplex_list is None), "Either adj or simplex_list need to be provided"
+    # Check if enough inputs are provided
+    if (position == 'spine') and (simplex_list is not None):
+        not_precomputed = False
+    elif (position == 'all') and (edge_par is not None):
+        not_precomputed = False
+    else:
+        not_precomputed = True
+    assert not (adj is None and not_precomputed), "Either adj or simplex_list/edge_participation need to be provided"
 
+    # Determine dimensions
     if dimensions == None:
         max_dim = -1
     else:
         max_dim = np.max(np.array(dimensions))
-
-    if (simplex_list is None):  # Compute simplex lists if not provided
-        simplex_list = list_simplices_by_dimension(adj, node_properties=None,
-                                                   max_simplices=max_simplices, max_dim=max_dim,
-                                                   simplex_type=simplex_type,
-                                                   nodes=None, verbose=False, **kwargs)
+    # Compute simplex list or edge particiption if not precomputed
+    if not_precomputed:
         N = adj.shape[0]
+        if position == "spine":  # Compute simplex since they are not provided
+            simplex_list = list_simplices_by_dimension(adj, node_properties=None,
+                                                       max_simplices=max_simplices, max_dim=max_dim,
+                                                       simplex_type='directed',
+                                                       nodes=None, verbose=False, **kwargs)
+        elif position == "all":  # More efficient than going from simplex lists if the position is not important
+            edge_par, simplex_counts = edge_participation(adj, node_properties=None, max_simplices=max_simplices,
+                                                          threads=threads, max_dim=max_dim, simplex_type=simplex_type,
+                                                          return_simplex_counts=True)
     else:
-        assert isinstance(N, int), 'If simplex list are provide N must be provided'
-        assert N > np.nanmax(simplex_list.explode().explode()), \
-            "N must be larger than all the entries in the simplex list"
-        assert (dimensions == None) or np.isin(dimensions, simplex_list.index).all(), \
-            f'Some requested dimensions={dimensions} are not in the simplex lists index={simplex_list.index.to_numpy()}'
+        if position == "spine":
+            assert N > np.nanmax(simplex_list.explode().explode()), \
+                "N must be larger than all the entries in the simplex list"
     # Extract 'k'-skeleton
-    dims = simplex_list.index[simplex_list.index != 0]  # Doesn't make sense to look at the 0-skeleton
+    if position == "spine":
+        dims = simplex_list.index[simplex_list.index != 0]  # Doesn't make sense to look at the 0-skeleton
+    elif position == "all":
+        dims = pd.Index(edge_par.drop(0, axis=1, errors="ignore").columns, name="dim")
     if dimensions != None:
         dims = dims[np.isin(dims, dimensions)]
     skeleton_mats = {f'dimension_{dim}': None for dim in dims}
-    for dim in dims:
-        mat = extract_submatrix_of_simplices(simplex_list[dim], N, position=position)
-        if simplex_type in ('undirected', 'reciprocal'):
-            mat = (mat + mat.T).astype(bool)
-        skeleton_mats[f'dimension_{dim}'] = mat
+    if position == "spine":
+        for dim in dims:
+            if simplex_list[dim].size > 0:
+                assert N > np.max(simplex_list[dim]), \
+                    "N must be larger than all the entries in the simplex list"
+                skeleton_mats[f'dimension_{dim}'] = extract_submatrix_from_simplex_list(simplex_list[dim], N,
+                                                                                        position=position)
+    elif position == "all":
+        skeleton_mats = extract_submatrices_from_edge_participation(edge_par, N, dims=dims, thresh=1)
     return skeleton_mats
 
 
-def count_rc_edges_k_skeleton(simplex_list_at_dim, N, position="all", return_mat=False):
-    """Count the edges and reciprocal edges in the simplex list provided.
-    If the list is all the k (maximal)simplices of a directed flag complex, it is counting the number of
-    edges and reciprocal edges of the its k-skeleton.
-
-    Parameters
-    ----------
-    simplex_list_at_dim: 2d-array
-        Array of dimension (no. of simplices, dimension).
-        Each row corresponds to a list of nodes on a simplex indexed by the
-        ordering given for all nodes in the graph
-    N: int
-        Number of nodes in original graph
-    position: str
-        Position of the edges to extract
-
-        'all': all edges of the simplex
-
-        'spine': edges along the spine of the simplex
-        (only makes sense for directed simplices)
-
-    Returns
-    -------
-    tuple of ints
-        Counts of (edges, reciprocal edges) in the simplex list
-
-    Raises
-    ------
-    AssertionError
-        If N <= than an entry in the simplex list
-    """
-
-    assert N > np.max(simplex_list_at_dim), \
-        "N must be larger than all the entries in the simplex list"
-
-    mat = extract_submatrix_of_simplices(simplex_list_at_dim, N, position=position)
-    edge_counts = mat.sum()
-    rc_edge_counts = rc_submatrix(mat).sum()
-    # Return mats?
-    if return_mat == True:
-        return edge_counts, rc_edge_counts, mat
-    else:
-        return edge_counts, rc_edge_counts
-
-
 def count_rc_edges_skeleta(adj=None, max_dim=-1, max_simplices=False,
-                           simplex_list=None, N=None,
-                           position="all", return_mats=False, **kwargs):
-    # check max dim is consistent with simplex_list only used if adj is given and must be >0
-    """Count the edges and reciprocal edges in the k-skeleta of the directed flag complex of adj for all
+                            N=None, simplex_list=None, edge_par=None,
+                           simplex_type='directed',position="all",
+                           return_mats=False,threads=8, **kwargs):
+    """Count the edges and reciprocal edges in the k-``skeleta`` of the directed flag complex of adj for all
     k<= max_dim. If simplex list are provided, it will compute the skeleta directly from these and not use adj.
 
     Parameters
@@ -1066,8 +1173,13 @@ def count_rc_edges_skeleta(adj=None, max_dim=-1, max_simplices=False,
         Each array is of dimension (no. of simplices, dimension).
         Each row corresponds to a list of nodes on a simplex.
         If provided adj will be ignored but N will be required.
+    edge_par: DataFrame
+        DataFrame with edge participation values formatted as the output of ``edge_participation`` i.e.,
+        indexed by the edges in adj and with columns de dimension for which edge participation is counted
     N: int
         Number of nodes in original graph.
+    simple_type: str
+        See [simplex_counts](network_topology.md#src.connalysis.network.topology.simplex_counts)
     position: str
         Position of the edges to extract
 
@@ -1077,7 +1189,9 @@ def count_rc_edges_skeleta(adj=None, max_dim=-1, max_simplices=False,
         (only makes sense if simplices are directed)
     return_mats : bool
         If True return the matrices of the underlying graphs of the k-skeleta as in
-        get_k_skeleta_graph.
+        get_k_skeleta_graph
+    threads: int
+        Number of threads into which to parallelize the computation
 
     Returns
     -------
@@ -1088,40 +1202,84 @@ def count_rc_edges_skeleta(adj=None, max_dim=-1, max_simplices=False,
     Raises
     ------
     AssertionError
-        If neither adj nor simplex_list are provided
+        If neither adj nor precomputed simplex_list or edge_par values are provided
     AssertionError
         If N <= than an entry in the simplex list
+
+    See Also
+    --------
+    [edge_participation](network_topology.md#src.connalysis.network.topology.edge_participation) :
+    A function that counts the number of times an edge is part of a simplex.
+
+    [simplex_counts](network_topology.md#src.connalysis.network.topology.simplex_counts) :
+    A function that counts the simplices forming the complex from which bettis are count,
+    where simplex types are described in detail.
     """
 
-    assert not (adj is None and simplex_list is None), "Either adj or simplex_list need to be provided"
-
-    if (simplex_list is None):  # Compute simplex lists if not provided
-        simplex_list = list_simplices_by_dimension(adj, node_properties=None,
-                                                            max_simplices=max_simplices, max_dim=max_dim,
-                                                            simplex_type='directed',
-                                                            nodes=None, verbose=False, **kwargs)
-        N = adj.shape[0]
+    # Check if enough inputs are provided
+    if (position == 'spine') and (simplex_list is not None):
+        not_precomputed = False
+    elif (position == 'all') and (edge_par is not None):
+        not_precomputed = False
     else:
-        assert N > np.nanmax(simplex_list.explode().explode()), \
-            "N must be larger than all the entries in the simplex list"
+        not_precomputed = True
+
+    assert not (adj is None and not_precomputed), "Either adj or simplex_list/edge_participation need to be provided"
+
+    if not_precomputed:
+        N = adj.shape[0]
+        if position == "spine":  # Compute simplex since they are not provided
+            simplex_list = list_simplices_by_dimension(adj, node_properties=None,
+                                                       max_simplices=max_simplices, max_dim=max_dim,
+                                                       simplex_type='directed',
+                                                       nodes=None, verbose=False, **kwargs)
+        elif position == "all":  # More efficient than going from simplex lists if the position is not important
+            edge_par, simplex_counts = edge_participation(adj, node_properties=None, max_simplices=max_simplices,
+                                                          threads=threads, max_dim=max_dim, simplex_type=simplex_type,
+                                                          return_simplex_counts=True)
+
+    else:
+        if position == "spine":
+            assert N > np.nanmax(simplex_list.explode().explode()), \
+                "N must be larger than all the entries in the simplex list"
 
     # Extract 'k'-skeleton and count (rc-)edges
-    dims = simplex_list.index[simplex_list.index != 0]  # Doesn't make sense to look at the 0-skeleton
+    if position == "spine":
+        dims = simplex_list.index[simplex_list.index != 0]  # Doesn't make sense to look at the 0-skeleton
+    elif position == "all":
+        dims = pd.Index(edge_par.drop(0, axis=1, errors="ignore").columns, name="dim")
     edge_counts = pd.DataFrame(index=dims, columns=["number_of_edges", "number_of_rc_edges", "rc/edges_percent"])
     if return_mats == True:
         skeleton_mats = {f'dimension_{dim}': None for dim in dims}
-    print(dims)
-    for dim in dims:
-        if simplex_list[dim].size > 0:
-            edges, rc_edges, mat = count_rc_edges_k_skeleton(simplex_list[dim], N,
-                                                                      position=position, return_mat=True)
+
+    if position == "spine":
+        for dim in dims:
+            if simplex_list[dim].size > 0:
+                assert N > np.max(simplex_list[dim]), \
+                    "N must be larger than all the entries in the simplex list"
+                mat = extract_submatrix_from_simplex_list(simplex_list[dim], N, position=position)
+                edges = mat.sum();
+                rc_edges = rc_submatrix(mat).sum()
+                edge_counts["number_of_edges"].loc[dim] = edges
+                edge_counts["number_of_rc_edges"].loc[dim] = rc_edges
+                edge_counts["rc/edges_percent"].loc[dim] = (rc_edges * 100) / edges
+            else:
+                edge_counts["number_of_edges"].loc[dim] = 0
+            if return_mats == True:
+                skeleton_mats[f'dimension_{dim}'] = mat
+    elif position == "all":
+        skeleton_mats = extract_submatrices_from_edge_participation(edge_par, N, dims=dims, thresh=1)
+        for dim in dims:
+            edges = skeleton_mats[f'dimension_{dim}'].sum()
             edge_counts["number_of_edges"].loc[dim] = edges
-            edge_counts["number_of_rc_edges"].loc[dim] = rc_edges
-            edge_counts["rc/edges_percent"].loc[dim] = (rc_edges * 100) / edges
-        else:
-            edge_counts["number_of_edges"].loc[dim] = 0
-        if return_mats == True:
-            skeleton_mats[f'dimension_{dim}'] = mat
+            if edges > 0:
+                rc_edges = rc_submatrix(skeleton_mats[f'dimension_{dim}']).sum()
+                edge_counts["number_of_rc_edges"].loc[dim] = rc_edges
+                edge_counts["rc/edges_percent"].loc[dim] = (rc_edges * 100) / edges
+            else:
+                edge_counts["number_of_rc_edges"].loc[dim] = 0
+                edge_counts["rc/edges_percent"].loc[dim] = 0
+
     if return_mats == True:
         return edge_counts, skeleton_mats
     else:
@@ -1130,42 +1288,44 @@ def count_rc_edges_skeleta(adj=None, max_dim=-1, max_simplices=False,
 
 def bedge_counts(adjacency, simplices=None,
                  max_simplices = False, max_dim = -1, simplex_type = 'directed', ** kwargs):
-    """Count the sum number of edges per position on the subgraphs defined by the nodes of the simplices in simplices.
+    r"""Counts the total number of edges in each position on the subgraphs defined by the nodes
+    of the simplices listed in simplices.  If a simplex list is not passed, simplices are computed on
+    the adjacency matrix.
 
-        Parameters
-        ----------
-        adjacency : (N,N)-array or sparse matrix
-            Adjacency matrix of a directed network.  A non-zero entry adj[i,j] implies there is an edge from i to j.
-            The matrix can be asymmetric, but must have 0 in the diagonal.
-        simplices : series
-            Series  of 2d-arrays indexed by dimension.
-            Each array is of dimension (no. of simplices, dimension).
-            Each row corresponds to a list of nodes on a simplex.
-        max_simplices : bool
-            If False counts all simplices in adj.
-            If True counts only maximal simplices i.e., simplex motifs that are not contained in higher dimensional ones.
-        max_dim : int
-            Maximal dimension up to which simplex motifs are counted.
-            The default max_dim = -1 counts all existing dimensions.  Particularly useful for large or dense graphs.
-        simplex_type: str
-            See [simplex_counts](network.md#src.connalysis.network.topology.simplex_counts)
+    Parameters
+    ----------
+    adjacency : (N,N)-array or sparse matrix
+        Adjacency matrix of a directed network.  A non-zero entry adj[i,j] implies there is an edge from i to j.
+        The matrix can be asymmetric, but must have 0 in the diagonal.
+    simplices : series
+        Series  of 2d-arrays indexed by dimension.
+        Each array is of dimension (no. of simplices, dimension).
+        Each row corresponds to a list of nodes on a simplex.
+    max_simplices : bool
+        If False counts all simplices in adj.
+        If True counts only maximal simplices i.e., simplex motifs that are not contained in higher dimensional ones.
+    max_dim : int
+        Maximal dimension up to which simplex motifs are counted.
+        The default max_dim = -1 counts all existing dimensions.  Particularly useful for large or dense graphs.
+    simplex_type: str
+        See [simplex_counts](network_topology.md#src.connalysis.network.topology.simplex_counts)
 
-        Returns
-        -------
-        series
-            pandas series with index dimensions values (dim+1, dim+1) arrays.  The (i,j) entry counts the number of edges
-            from node i to node j on all the subgraphs of adjacency on the nodes of the simplices listed.  See notes.
+    Returns
+    -------
+    series
+        pandas series with index dimensions values (dim+1, dim+1) arrays.  The (i,j) entry counts the number of edges
+        from node i to node j on all the subgraphs of adjacency on the nodes of the simplices listed.  See notes.
 
-        Notes
-        -------
-        Every directed $k$-simplex $[v_o, v_1, \\ldots, v_k]$ defines as subgraph of the adjacency matrix, with edges
-        $v_i \\to v_j$ whenever $i\leq j$, but also possibly with ''reverse'' edges.  One can represent this structure
-        with a non-symmetric $(k+1, k+1)$-matrix with `1`'s for every edge in the subgraph.  The output of this function
-        gives for each dimension the sum of all these matrices over all the simplices provided in `simplices` or over
-        all the simplices in the adjacency matrix if none is provided.  The lower triangular part of these matrices is
-        therefore a metric of recurrence within simplices, or "higher dimensional recurrence".
-        In particular, in dimension 1 it is the number of reciprocal edges in the network.
-        """
+    Notes
+    -------
+    Every directed $k$-simplex $[v_o, v_1, \ldots, v_k]$ defines as subgraph of the adjacency matrix, with edges
+    $v_i \to v_j$ whenever $i\leq j$, but also possibly with ''reverse'' edges.  One can represent this structure
+    with a non-symmetric $(k+1, k+1)$-matrix with `1`'s for every edge in the subgraph.  The output of this function
+    gives for each dimension the sum of all these matrices over all the simplices provided in `simplices` or over
+    all the simplices in the adjacency matrix if none is provided.  The lower triangular part of these matrices is
+    therefore a metric of recurrence within simplices, or "higher dimensional recurrence".
+    In particular, in dimension 1 it is the number of reciprocal edges in the network.
+    """
 
     adj = adjacency
 
@@ -1389,215 +1549,185 @@ def get_all_simplices_from_max(max_simplices):
 
     return simplices
 
-#################################################################################################################################################
-#################################################################################################################################################
-#################################################################################################################################################
-#################################################################################################################################################  BELOW STILL TO CLEAN UP
 
-#######################################################
-################## WEIGHTED NETWORKS ##################
-#######################################################
-
-def at_weight_edges(weighted_adj, threshold, method="strength"):
-    """ Returns thresholded network on edges
-    :param method: distance returns edges with weight smaller or equal than thresh
-                   strength returns edges with weight larger or equal than thresh
-                   assumes csr format for weighted_adj"""
-    data=weighted_adj.data
-    data_thresh=np.zeros(data.shape)
-    if method == "strength":
-        data_thresh[data>=threshold]=data[data>=threshold]
-    elif method == "distance":
-        data_thresh[data<=threshold]=data[data<=threshold]
-    else:
-        raise ValueError("Method has to be 'strength' or 'distance'")
-    adj_thresh=weighted_adj.copy()
-    adj_thresh.data=data_thresh
-    adj_thresh.eliminate_zeros()
-    return adj_thresh
-
-
-def filtration_weights(adj, node_properties=None, method="strength"):
-    """
-    Returns the filtration weights of a given weighted adjacency matrix.
-    :param method: distance smaller weights enter the filtration first
-                   strength larger weights enter the filtration first
-
-    TODO: Should there be a warning when the return is an empty array because the matrix is zero?
-    """
-    if method == "strength":
-        return np.unique(adj.data)[::-1]
-
-    if method == "distance":
-        return np.unique(adj.data)
-
-    raise ValueError("Method has to be 'strength' or 'distance'")
-
-
-def bin_weigths(weights, n_bins=10, return_bins=False):
-    '''Bins the np.array weights
-    Input: np.array of floats, no of bins
-    returns: bins, and binned data i.e. a np.array of the same shape as weights with entries the center value of its corresponding bin
-    '''
-    tol = 1e-8 #to include the max value in the last bin
-    min_weight = weights.min()
-    max_weight = weights.max() + tol
-    step = (max_weight - min_weight) / n_bins
-    bins = np.arange(min_weight, max_weight + step, step)
-    digits = np.digitize(weights, bins)
-
-    weights = (min_weight + step / 2) + (digits - 1) * step
-    return (weights, bins) if return_bins else weights
-
-
-def filtered_simplex_counts(adj, node_properties=None, method="strength",
-                            binned=False, n_bins=10, threads=1,
-                            **kwargs):
-    '''Takes weighted adjancecy matrix returns data frame with filtered simplex counts where index is the weight
-    method strength higher weights enter first, method distance smaller weights enter first'''
-    from tqdm import tqdm
-    adj = adj.copy()
-    if binned==True:
-        adj.data = bin_weigths(adj.data, n_bins=n_bins)
-
-    weights = filtration_weights(adj, node_properties, method)
-
-#    TODO: 1. Prove that the following is executed in the implementation that follows.
-#    TODO: 2. If any difference, update the implementation
-#    TODO: 3. Remove the reference code.
-#    n_simplices = dict.fromkeys(weights)
-#    for weight in tqdm(weights[::-1],total=len(weights)):
-#        adj = at_weight_edges(adj, threshold=weight, method=method)
-#        n_simplices[weight] = simplex_counts(adj, threads=threads)
-
-    m = method
-    def filter_weight(w):
-        adj_w = at_weight_edges(adj, threshold=w, method=m)
-        return simplex_counts(adj_w, threads=threads)
-
-    n_simplices = {w: filter_weight(w) for w in weights[::-1]}
-    return pd.DataFrame.from_dict(n_simplices, orient="index").fillna(0).astype(int)
-
-
-def chunk_approx_and_dims(min_dim=0, max_dim=[], approximation=None):
-    # Check approximation list is not too long and it's a list of integers
-    assert (all([isinstance(item, int) for item in approximation])), 'approximation must be a list of integers'
-    approximation = np.array(approximation)
-    if max_dim == []:
-        max_dim = np.inf
-    assert (approximation.size - 1 <= max_dim - min_dim), "approximation list too long for the dimension range"
-
-    # Split approximation into sub-vectors of same value to speed up computation
-    diff = approximation[1:] - approximation[:-1]
-    slice_indx = np.array(np.where(diff != 0)[0]) + 1
-    dim_chunks = np.split(np.arange(approximation.size) + min_dim, slice_indx)
-    if approximation[-1] == -1:
-        dim_chunks[-1][-1] = -1
-    else:
-        if dim_chunks[-1][-1] < max_dim:
-            dim_chunks.append([dim_chunks[-1][-1] + 1, max_dim])
-
-    # Returned chuncked lists
-    approx_chunks = []
-    for j in range(len(dim_chunks)):
-        if (approximation.size < max_dim - min_dim + 1) and approximation[-1] != -1 and j == len(dim_chunks) - 1:
-            a = -1
-        else:
-            a = approximation[int(dim_chunks[j][0]) - min_dim]
-        approx_chunks.append(a)
-    return dim_chunks, approx_chunks
-
-
-def persistence(weighted_adj, node_properties=None,
-                min_dim=0, max_dim=[], directed=True, coeff=2, approximation=None,
-                invert_weights=False, binned=False, n_bins=10, return_bettis=False,
-                **kwargs):
-    from pyflagser import flagser_weighted
-    import numpy as np
-    # Normalizing and binning data
-    adj = weighted_adj.copy()
-    if invert_weights == True:
-        # Normalizing data between 0-1 and inverting order of the entries
-        adj.data = (np.max(adj.data) - adj.data) / (np.max(adj.data) - np.min(adj.data))
-    if binned == True:
-        adj.data = bin_weigths(adj.data, n_bins=n_bins)
-
-    # Sending computation to flagser
-    # For single approximate value
-    if approximation == None or isinstance(approximation, int):
-        if min_dim != 0:
-            LOG.info("Careful of pyflagser bug with range in dimension")
-        out = flagser_weighted(adj, min_dimension=min_dim, max_dimension=max_dim, directed=True, coeff=2,
-                               approximation=approximation)
-        dgms = out['dgms']
-        bettis = out['betti']
-    # For approximate list
-    else:
-        # Chunk values to speed computations
-        dim_chunks, approx_chunks = chunk_approx_and_dims(min_dim=min_dim, max_dim=max_dim, approximation=approximation)
-        bettis = []
-        dgms = []
-        for dims_range, a in zip(dim_chunks, approx_chunks):
-            n = dims_range[0]  # min dim for computation
-            N = dims_range[-1]  # max dim for computation
-            if N == -1:
-                N = np.inf
-            if a == -1:
-                a = None
-            LOG.info("Run betti for dim range %s-%s with approximation %s",n, N, a)
-            if n != 0:
-                LOG.info("Warning, possible bug in pyflagser when not running dimension range starting at dim 0")
-            out = flagser_weighted(adj, min_dimension=n, max_dimension=N, directed=True, coeff=2, approximation=a)
-            bettis = bettis + out['betti']
-            dgms = dgms + out['dgms']
-            LOG.info("out: %s",[out['dgms'][i].shape for i in range(len(out['dgms']))])
-    if return_bettis == True:
-        return dgms, bettis
-    else:
-        return dgms
-
-#Tools for persistence
-def num_cycles(B,D,thresh):
-    #Given a persistence diagram (B,D) compute the number of cycles alive at tresh
-    #Infinite bars have death values np.inf
-    born=np.count_nonzero(B<=thresh)
-    dead=np.count_nonzero(D<=thresh)
-    return born-dead
-
-def betti_curve(B,D):
-    #Given a persistence diagram (B,D) compute its corresponding betti curve
-    #Infinite bars have death values np.inf
-    filt_values=np.concatenate([B,D])
-    filt_values=np.unique(filt_values)
-    filt_values=filt_values[filt_values!=np.inf]
-    bettis=[]
-    for thresh in filt_values:
-        bettis.append(num_cycles(B,D,thresh))
-    return filt_values,np.array(bettis)
-
-
-    """Computes the simplicial rich club curve of a network. 
-       Where the i'th entry is the density of the subnetwork induced by the vertices that are contained in
-       more than i (maximal) simplices.
-
-    Parameters
-    ----------
-    adj : 2d-array
-        Adjacency matrix of a directed network.
-    max_simplices : bool
-        If true then vertex participation is the number of maximal simplices each vertex is contained in.
-    sparse_bin_set : bool
-        If true then consecutive entries with same rich club coefficient are grouped into bins together,
-
-    Returns
-    -------
-    pandas.Series
-        Where the i'th entry is the rich club coefficient of the network induced by all vertices which are
-        contained in more that i (maximal) simplices
-
-    """
 def simplicial_rich_club_curve(M, maximal=False, sparse_bin_set=False):
+    """Computes the simplicial rich club curve of a network.
+           Where the i'th entry is the density of the subnetwork induced by the vertices that are contained in
+           more than i (maximal) simplices.
+
+        Parameters
+        ----------
+        adj : 2d-array
+            Adjacency matrix of a directed network.
+        max_simplices : bool
+            If true then vertex participation is the number of maximal simplices each vertex is contained in.
+        sparse_bin_set : bool
+            If true then consecutive entries with same rich club coefficient are grouped into bins together,
+
+        Returns
+        -------
+        pandas.Series
+            Where the i'th entry is the rich club coefficient of the network induced by all vertices which are
+            contained in more that i (maximal) simplices
+
+    """
     import pyflagsercount
     from .classic import efficient_rich_club_curve
     vertex_par = pd.DataFrame(pyflagsercount.flagser_count(M, max_simplices=maximal, containment=True)['contain_counts']).replace(np.nan,0).astype(int)
     return pd.DataFrame([efficient_rich_club_curve(M, pre_calculated_richness=vertex_par[i]) for i in range(vertex_par.shape[1])]).transpose().dropna(how='all')
+
+
+
+#######################################################
+################# METHODS FROM TRIDY ##################
+#######################################################
+
+
+def euler_characteristic(matrix):
+    """Computes the Euler characteristic of the flag complex of the graph with adjacency matrix matrix
+
+        Parameters
+        ----------
+        matrix : 2d-array
+            Adjacency matrix of a directed network.
+
+        Returns
+        -------
+        integer
+            The Euler characteristic of the flag complex of matrix
+
+    """
+    return pyflagsercount.flagser_count(M)['euler']
+
+
+
+
+
+def tcc(matrix,center=0):
+    """Computes the transitive clustering coefficient of the graph induced by
+        the neighbourhood of center ``center`` in the matrix
+
+        Parameters
+        ----------
+
+        matrix : 2d-array
+            Adjacency matrix of a directed network.
+        center : int
+            The index of the vertex to be considered, default=0
+
+        Returns
+        -------
+        float
+            The transitive cluster coefficient of the neighbourhood of center
+
+    """
+    from .classic import reciprocal_connections
+    outdeg = np.count_nonzero(matrix[center])
+    indeg = np.count_nonzero(np.transpose(matrix)[center])
+    repdeg = reciprocal_connections(matrix, chief_only=True)
+    totdeg = indeg+outdeg
+
+    #If matrix is not already neighbourhood of center, then compute neighbourhood.
+    if totdeg-repdeg+1 != len(matrix):
+        matrix = neighbourhood(center, matrix)
+        center = 0
+
+    chief_containment = node_participation(matrix,max_dim=2).iloc[0]
+    numerator = 0 if len(chief_containment) < 3 else chief_containment[2]
+    denominator = (totdeg*(totdeg-1)-(indeg*outdeg+repdeg))
+
+    if denominator == 0:
+        return 0
+    return numerator/denominator
+
+
+
+def dc(matrix, center=0, coeff_index=2, nhbd=True):
+    """Computes the density coefficient of the graph induced by
+        the neighbourhood of center ``center`` in the matrix
+
+        Parameters
+        ----------
+
+        matrix : 2d-array
+            Adjacency matrix of a directed network.
+        center : int
+            The index of the vertex whose neighbourhood is to be considered, default=0
+        coeff_index : int
+             The dimension to be computed, default=2
+        nhbd : bool
+             If true then is assumed that matrix is the neighbourhood of center.
+             If false the neighbourhood of center is computed and used, default= True.
+
+        Returns
+        -------
+        float
+            The density coefficient of the neighbourhood of center
+
+    """
+    assert coeff_index >= 2, 'Assertion error: Density coefficient must be at least 2'
+    if not nhbd:
+        matrix = neighbourhood(center, matrix)
+        center = 0
+
+    flagser_output = node_participation(matrix,max_dim=coeff_index).iloc[center]
+    if len(flagser_output) <= coeff_index:
+        density_coeff = 0
+    elif flagser_output[coeff_index] == 0:
+        density_coeff = 0
+    else:
+        numerator = coeff_index*flagser_output[coeff_index]
+        denominator = (coeff_index+1)*(len(matrix)-coeff_index)*flagser_output[coeff_index-1]
+        if denominator == 0:
+            density_coeff = 0
+        else:
+            density_coeff = numerator/denominator
+    return density_coeff
+
+
+
+
+#I have kept this for now for backwards compatability, in case it is used anywhere in existing code
+def normalised_simplex_count(matrix, dim=2):
+    """Computes the normalised simplex count of the flag complex of the graph with adjacency matrix matrix
+
+        Parameters
+        ----------
+        matrix : 2d-array
+            Adjacency matrix of a directed network.
+        dim : int
+             The dimension to be computed, default=2
+
+        Returns
+        -------
+        float
+            The normalised simplex count of dimension dim of the flag complex of matrix
+
+    """
+    return normalized_simplex_counts(matrix)[dim]
+
+
+
+def nbc(matrix):
+    """Computes the normalised Betti coefficient of the graph with adjacency matrix matrix
+
+        Parameters
+        ----------
+        matrix : 2d-array
+            Adjacency matrix of a directed network.
+
+        Returns
+        -------
+        float
+            The normalised Betti coefficient of the graph with adjacency matrix matrix
+
+    """
+    flagser_output = pyflagser.flagser_unweighted(matrix, directed=True)
+    cells = flagser_output['cell_count']
+    bettis = flagser_output['betti']
+    while (cells[-1] == 0) and (len(cells) > 1):
+        cells = cells[:-1]
+    while (bettis[-1] == 0) and (len(bettis) > 1):
+        bettis = bettis[:-1]
+    normalized_betti_list = [(i+1)*bettis[i]/cells[i] for i in range(min(len(bettis),len(cells)))]
+    return sum(normalized_betti_list)

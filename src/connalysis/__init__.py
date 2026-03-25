@@ -1,10 +1,12 @@
-"""Functions for network analysis of graphs coming brain models."""
+# SPDX-FileCopyrightText: 2024 Blue Brain Project / EPFL
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
-from connalysis import (
-    modelling,
-    network,
-    randomization
-)
+"""Functions for network analysis on connectomes."""
+
+from connalysis import (modelling,
+                        network,
+                        randomization)
 __all__ = [
-    "modelling","network","randomization"
+    "modelling","network","randomization", "rand_utils"
 ]
