@@ -76,7 +76,7 @@ def run_SBM(n, probs, blocks, threads=8, seed=(None,None)):
         Number of vertices
     probs : numpy array of floats
         shape=(m,m) where m is the number of blocks.
-        probs[i][j] is probability of an edge between block i and block j
+        `probs[i][j]` is probability of an edge between block i and block j
     blocks : numpy array of ints
         shape=(n,). The i'th entry gives to which block vertex i belongs.
     threads : int
@@ -286,8 +286,8 @@ def run_DD2_block_pre(n, probs, blocks, xyz, threads=8, seed=(None,None)):
         Number of vertices
     probs : numpy array of floats
         shape=(m,2) where m is the number of blocks.
-        probs[i][0] is the coefficient of the distance dependent equation (value a) for source vertex i and
-        probs[i][0] is the absolute value of power of exponent in the distance dependent equation (value b)
+        `probs[i][0]` is the coefficient of the distance dependent equation (value a) for source vertex i and
+        `probs[i][1]` is the absolute value of power of exponent in the distance dependent equation (value b)
     blocks : numpy array of ints
         shape=(n,). The i'th entry is which block vertex i belongs to.
     xyz : (n,3)-numpy array of floats
@@ -342,8 +342,8 @@ def run_DD2_block(n, probs, blocks, xyz, threads, seed=(None,None)):
         Number of vertices
     probs : numpy array of floats
         shape=(m,m,2) where m is the number of blocks. For source vertex i and target vertex j
-        probs[i][j][0] is the coefficient of the distance dependent equation (value a) and
-        probs[i][j][0] is the absolute value of power of exponent in the distance dependent equation (value b)
+        `probs[i][j][0]` is the coefficient of the distance dependent equation (value a) and
+        `probs[i][j][1]` is the absolute value of power of exponent in the distance dependent equation (value b)
     blocks : numpy array of ints
         shape=(n,). The i'th entry is which block vertex i belongs to.
     xyz : (n,3)-numpy array of floats

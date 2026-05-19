@@ -698,7 +698,7 @@ def betti_counts(adj, node_properties=None,
 
     See Also
     --------
-    [simplex_counts](network.md#src.connalysis.network.topology.simplex_counts) :
+    [connalysis.network.topology.simplex_counts][] :
     A function that counts the simplices forming the complex from which bettis are count.
     Simplex types are described there in detail.
 
@@ -868,7 +868,7 @@ def extract_submatrix_of_simplices(simplex_list, N, position="all"):
 
     Parameters
     ----------
-    simplex list: 2d-array
+    simplex_list : 2d-array
         Array of dimension (no. of simplices, dimension).
         Each row corresponds to a list of nodes on a simplex
         indexed by the order of the nodes in an NxN matrix.
@@ -929,7 +929,7 @@ def get_k_skeleta_graph(adj=None, max_simplices=False, dimensions=None, simplex_
         ’undirected’ - simplices in the underlying undirected graph
 
         ’reciprocal’ - simplices in the undirected graph of reciprocal connections
-    simplex list: series
+    simplex_list : series
         Series 2d-arrays indexed by dimension.
         Each array is of dimension (no. of simplices, dimension).
         Each row corresponds to a list of nodes on a simplex.
@@ -1061,7 +1061,7 @@ def count_rc_edges_skeleta(adj=None, max_dim=-1, max_simplices=False,
     max_dim : int
         Maximal dimension up to which simplex motifs are counted.
         The default max_dim = -1 counts all existing dimensions.  Particularly useful for large or dense graphs.
-    simplex list: series
+    simplex_list : series
         Series 2d-arrays indexed by dimension.
         Each array is of dimension (no. of simplices, dimension).
         Each row corresponds to a list of nodes on a simplex.
@@ -1148,7 +1148,7 @@ def bedge_counts(adjacency, simplices=None,
             Maximal dimension up to which simplex motifs are counted.
             The default max_dim = -1 counts all existing dimensions.  Particularly useful for large or dense graphs.
         simplex_type: str
-            See [simplex_counts](network.md#src.connalysis.network.topology.simplex_counts)
+            See [connalysis.network.topology.simplex_counts][]
 
         Returns
         -------
