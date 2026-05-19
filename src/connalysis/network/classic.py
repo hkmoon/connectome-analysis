@@ -98,13 +98,6 @@ def core_number(adj):
         ----------
         adj : array_like or sparse matrix
             Adjacency matrix of the graph
-        directed : bool
-            If `True`, will be compute connected components of the directed graph
-        connection : str {'weak', 'strong'}
-            If `weak`, it will compute the connected components of the underlying undirected graph. 
-            If `strong`, it will compute strongly connected components of the directed graph.
-        return_labels : bool
-            If `True`, will return the labels of the connected components
 
         Returns
         -------

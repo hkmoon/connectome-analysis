@@ -115,7 +115,7 @@ def run_SBM(n, probs, blocks, threads=8, seed=(None,None)):
         Number of vertices
     probs : numpy array of floats
         shape=(m,m) where m is the number of blocks.
-        probs[i][j] is probability of an edge between block i and block j
+        `probs[i][j]` is probability of an edge between block i and block j
     blocks : numpy array of ints
         shape=(n,). The i'th entry gives to which block vertex i belongs.
     threads : int
@@ -316,8 +316,8 @@ def run_DD2_block_pre(n, probs, blocks, xyz, threads=8, seed=(None,None)):
         Number of vertices
     probs : numpy array of floats
         shape=(m,2) where m is the number of blocks.
-        probs[i][0] is the coefficient of the distance dependent equation (value a) for source vertex i and
-        probs[i][0] is the absolute value of power of exponent in the distance dependent equation (value b)
+        `probs[i][0]` is the coefficient of the distance dependent equation (value a) for source vertex i and
+        `probs[i][1]` is the absolute value of power of exponent in the distance dependent equation (value b)
     blocks : numpy array of ints
         shape=(n,). The i'th entry is which block vertex i belongs to.
     xyz : (n,3)-numpy array of floats
@@ -370,8 +370,8 @@ def run_DD2_block(n, probs, blocks, xyz, threads, seed=(None,None)):
         Number of vertices
     probs : numpy array of floats
         shape=(m,m,2) where m is the number of blocks. For source vertex i and target vertex j
-        probs[i][j][0] is the coefficient of the distance dependent equation (value a) and
-        probs[i][j][0] is the absolute value of power of exponent in the distance dependent equation (value b)
+        `probs[i][j][0]` is the coefficient of the distance dependent equation (value a) and
+        `probs[i][j][1]` is the absolute value of power of exponent in the distance dependent equation (value b)
     blocks : numpy array of ints
         shape=(n,). The i'th entry is which block vertex i belongs to.
     xyz : (n,3)-numpy array of floats
@@ -446,8 +446,6 @@ def ER_shuffle(adj, neuron_properties=[], shuffle_type="sparse"):
     shuffle_type : string
         If ``dense`` if first converts adj to a dense array and then shuffle.
         If ``sparse`` it keeps sparsity during the shuffle.
-    seed : int
-        Random seed to be used, if none is provided a seed is randomly selected
 
     Returns
     -------
@@ -505,7 +503,7 @@ def configuration_model(M, seed = None):
 
     Parameters
     ----------
-    adj : coo-matrix
+    M : coo-matrix
         Adjacency matrix of a directed network.
     seed : int
         Random seed to be used
@@ -858,7 +856,7 @@ def random_geometric_model(pts, pts_x=None, n_neighbors=None, dist_neighbors=Non
         `dist_neighbors`, but only the selection from the candidates.
     no_diag : bool
         If set to False, connections from a vertex to itself are allowed to be placed.
-    symmetrize : bool
+    mirror : bool
         If set to True, the output matrix is made symmetrical with the following strategy: If a connection
         from vertex i to j exists, a connection is also placed from j to i if it does not already exist.
         This is ignored without warning if `pts_x` is specified.

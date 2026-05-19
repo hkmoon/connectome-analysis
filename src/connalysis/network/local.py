@@ -165,7 +165,7 @@ def neighborhood_of_set(M, node_set, pre=True, post=True, include_centers=True, 
                 If ``True`` compute the submatrix on the nodes mapping to node_set (the in-neighbors of node_set)
             post : bool
                 If ``True`` compute the submatrix on the nodes that node_set maps to (the out-neighbors of node_set)
-            include_center : bool
+            include_centers : bool
                 If ``True`` include node_set in the graph
             return_neighbors : bool
                 If ``True`` also return the indices in M of the neighbors of node_set
