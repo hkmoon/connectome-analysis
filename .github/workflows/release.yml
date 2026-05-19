@@ -1,24 +1,22 @@
-name: Release
+name: Deploy docs
 
 on:
   release:
-    types: [ published ]
+    types: [published]
 
 jobs:
-  build-and-publish:
+  deploy-docs:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write
       contents: write
 
     steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/python-poetry-env
-      - name: Build
-        run: |
-          poetry build --no-interaction
-      - name: Publish to Pypi
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package and docs dependencies
+        run: pip install . mkdocs-material "mkdocstrings[python]>=0.18"
       - name: Deploy docs
-        run: poetry run mkdocs gh-deploy --force
+        run: mkdocs gh-deploy --force
