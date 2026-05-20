@@ -35,12 +35,5 @@ To install, in your terminal run:
 pip install git+https://github.com/danielaegassan/connectome_analysis.git
 ```
 
-For the installation to work you require: 
-
-* [gcc](https://gcc.gnu.org/) 9+
-* [CMake](https://cmake.org/)
-* Python 3.8+
-
-Python requirements will be installed directly and are listed 
-[here](https://github.com/danielaegassan/connectome_analysis/blob/e4e23e614f95d7eab8945fcb91d0cf8ecbbe47c0/requirements.txt).
+The only requirement is Python 3.9–3.12. All Python dependencies are declared in `pyproject.toml` and installed automatically by `pip`. The random-graph generators that were previously built from C++ sources now ship as the [`bigrandomgraphs`](https://pypi.org/project/bigrandomgraphs/) package, so no local C++ toolchain or CMake is needed.
 

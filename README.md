@@ -51,37 +51,29 @@ Copyright (c) 2025 Open Brain Institute.
 ## Development installation
 
 * Clone this repository
-* Requirements:
-  * [Poetry](https://python-poetry.org/)
-  * [gcc](https://gcc.gnu.org/) 9+
-  * [CMake](https://cmake.org/)
-  * Python 3.9+
+* Requirements: Python 3.9–3.12
 
-* Create a virtual environment and install the dependencies
+* Create a virtual environment and install the package with its development dependencies:
 
 ```sh
-poetry install
+python -m venv .venv
+source .venv/bin/activate  # on Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 ```
 
-CMake may have difficulties to find the right compilers to compile the C++ code. 
-If that is the case, you have to specify the path to the compilers yourself:
+The native random-graph generators previously bundled here now ship as the [`bigrandomgraphs`](https://pypi.org/project/bigrandomgraphs/) package, which is installed automatically as a dependency — no local C++ toolchain or CMake is required.
+
+* Run the tests:
 
 ```sh
-CC=/path/to/gcc CXX=/path/to/g++ poetry install
+pytest tests
 ```
 
-This is especially important on MacOS.
-
-* Activate the virtual environment
+* Build distribution artifacts (sdist + wheel):
 
 ```sh
-poetry shell
-```
-
-* Testing
-
-```sh
-poetry run pytest tests
+pip install build
+python -m build
 ```
 
 ### Documentation
