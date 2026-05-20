@@ -45,9 +45,9 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://openbraininstitute.github.io/connectome-analysis/"
-Homepage = "https://openbraininstitute.github.io/connectome-analysis/"
-Repository = "https://github.com/openbraininstitute/connectome-analysis.git"
+Documentation = "https://topnetbio.github.io/connectome_analysis/"
+Homepage = "https://topnetbio.github.io/connectome_analysis/"
+Repository = "https://github.com/topnetbio/connectome_analysis.git"
 
 [project.optional-dependencies]
 dev = [

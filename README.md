@@ -8,14 +8,14 @@
 
 ## Documentation 
 
-See our [**documentation**](https://openbraininstitute.github.io/connectome-analysis/) for detailed explanations including examples and tutorials.
+See our [**documentation**](https://topnetbio.github.io/connectome_analysis/) for detailed explanations including examples and tutorials.
 
 See our [**source code**](src/connalysis) for implementation details.
 
 ## User installation
 
 ```sh
-pip install git+https://github.com/openbraininstitute/connectome-analysis.git
+pip install git+https://github.com/topnetbio/connectome_analysis.git
 ```
 
 ---

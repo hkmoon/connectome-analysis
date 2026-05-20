@@ -1,5 +1,5 @@
 site_name: connalysis
-repo_url: https://github.com/openbraininstitute/connectome-analysis.git
+repo_url: https://github.com/topnetbio/connectome_analysis.git
 
 theme:
   name: material
